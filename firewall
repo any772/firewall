@@ -1,0 +1,200 @@
+#! /bin/bash
+
+#Functions
+
+view_command(){
+	case "$2" in
+		-s|--save)
+			/sbin/iptables-save
+			;;
+		-r|--readable)
+			/sbin/iptables -S
+			;;
+		*)
+			/sbin/iptables -nL
+			;;
+	esac
+}
+
+apply_command(){
+	case "$2" in
+		-p|--permanent)
+			if [ -n "$3" ]; then
+				FILE=$3
+				is_exec "$FILE"
+				"$FILE"
+				echo "Persistent rules from $FILE applied!"
+			else
+				firewall_rules
+				echo "Persistent rules from firewall_rules applied!"
+			fi
+			make_dir
+			/sbin/iptables-save > /etc/iptables/iptables.rules
+			;;
+		*)
+			if [ -n "$2" ]; then
+				FILE=$2
+				is_exec "$FILE"
+				"$FILE"
+				echo "Rules from $FILE applied!"
+			else
+				firewall_rules
+				echo "Rules from firewall_rules applied!"
+			fi
+			;;
+	esac
+}
+
+
+down_command(){
+	#Flush all rules and clear custom user-defined chains from filter table
+	/sbin/iptables -F
+	/sbin/iptables -X
+	#Clean NAT and mangle table
+	/sbin/iptables -t nat -F
+	/sbin/iptables -t nat -X
+	/sbin/iptables -t mangle -F
+	/sbin/iptables -t mangle -X
+	#Set all default policy into ACCEPT
+	/sbin/iptables -P INPUT ACCEPT
+	/sbin/iptables -P FORWARD ACCEPT
+	/sbin/iptables -P OUTPUT ACCEPT
+}
+
+reload_command(){
+	down_command
+	firewall_rules
+	make_dir
+	/sbin/iptables-save > /etc/iptables/iptables.rules
+}
+
+is_exec(){
+	if [ -x "$1" ]; then
+		echo "$1 is an executable"
+	else
+		echo "$1 is not an executable, changing permissions..."
+		chmod 711 $1
+	fi
+}
+
+make_dir(){
+	if [ -d "/etc/iptables" ]; then
+		echo ""
+	else
+		mkdir /etc/iptables/
+	fi
+}
+
+help_page(){
+	cat << EOF
+The 'firewall' command is a simple customizable script to help you modify iptables.
+Usage : firewall [OPTIONS]
+
+Options :
+   view			View current iptables state
+     Flags :
+     -s			View iptables-save format
+     -r			View human readable iptables list
+
+   apply		Apply firewall_rules function or custom rules /path/to/rules
+     Flags :
+     -p, --permanent	Apply permanently (persist after reboot)
+
+   down			resets iptables by flushing filter table, deleting user-defined
+			chains, set incoming, outgoing, and forwarded traffic to ACCEPT,
+			and clean NAT with MANGLE tables. 
+			WARNING : This operation is not saved to iptables.rules as to 
+			not break anything!
+   reload		Reset iptables and apply firewall_rules permanently
+   help, -h, --help	Print this page
+EOF
+}
+
+firewall_rules(){
+# iptables example configuration script from ChrisTitusTech/firewallsetup/firewall
+
+
+# Drop ICMP echo-request messages sent to broadcast or multicast addresses
+echo 1 > /proc/sys/net/ipv4/icmp_echo_ignore_broadcasts
+
+# Drop source routed packets
+echo 0 > /proc/sys/net/ipv4/conf/all/accept_source_route
+
+# Enable TCP SYN cookie protection from SYN floods
+echo 1 > /proc/sys/net/ipv4/tcp_syncookies
+
+# Don't accept ICMP redirect messages
+echo 0 > /proc/sys/net/ipv4/conf/all/accept_redirects
+
+# Don't send ICMP redirect messages
+echo 0 > /proc/sys/net/ipv4/conf/all/send_redirects
+
+# Enable source address spoofing protection
+echo 1 > /proc/sys/net/ipv4/conf/all/rp_filter
+
+# Log packets with impossible source addresses
+echo 1 > /proc/sys/net/ipv4/conf/all/log_martians
+
+# Flush all chains
+/sbin/iptables --flush
+
+# Allow unlimited traffic on the loopback interface
+/sbin/iptables -A INPUT -i lo -j ACCEPT
+/sbin/iptables -A OUTPUT -o lo -j ACCEPT
+
+# Set default policies
+/sbin/iptables --policy INPUT DROP
+/sbin/iptables --policy OUTPUT DROP
+/sbin/iptables --policy FORWARD DROP
+
+# Previously initiated and accepted exchanges bypass rule checking
+# Allow unlimited outbound traffic
+/sbin/iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+/sbin/iptables -A OUTPUT -m state --state NEW,ESTABLISHED,RELATED -j ACCEPT
+
+#Ratelimit SSH for attack protection
+/sbin/iptables -A INPUT -p tcp --dport 22 -m state --state NEW -m recent --update --seconds 60 --hitcount 4 -j DROP
+/sbin/iptables -A INPUT -p tcp --dport 22 -m state --state NEW -m recent --set
+/sbin/iptables -A INPUT -p tcp --dport 22 -m state --state NEW -j ACCEPT
+
+# Allow certain ports to be accessible from the outside
+# /sbin/iptables -A INPUT -p tcp --dport 25565 -m state --state NEW -j ACCEPT  #Minecraft
+# /sbin/iptables -A INPUT -p tcp --dport 8123 -m state --state NEW -j ACCEPT   #Dynmap plugin
+
+# Other rules for future use if needed.  Uncomment to activate
+# /sbin/iptables -A INPUT -p tcp --dport 80 -m state --state NEW -j ACCEPT    # http
+# /sbin/iptables -A INPUT -p tcp --dport 443 -m state --state NEW -j ACCEPT   # https
+
+# UDP packet rule.  This is just a random udp packet rule as an example only
+# /sbin/iptables -A INPUT -p udp --dport 5021 -m state --state NEW -j ACCEPT
+
+# Allow pinging of your server
+/sbin/iptables -A INPUT -p icmp --icmp-type 8 -m state --state NEW,ESTABLISHED,RELATED -j ACCEPT
+
+
+# Drop all other traffic
+/sbin/iptables -A INPUT -j DROP
+
+}
+
+#Main Options
+case "$1" in
+	view)
+		view_command "$@"
+		;;
+	apply)
+		apply_command "$@"
+		;;
+	down)
+		down_command
+		;;
+	reload)
+		reload_command
+		;;
+	-h|--help|help)
+		help_page
+		;;
+	*)
+		echo "Unknown command $1! Please use the -h and --help flag or help argument to view the help page"
+		;;
+esac
